@@ -83,6 +83,7 @@ class Consistency_Model:
         state=None,
         target_model=None,
         noise=None,
+        score_function=None,
     ):
 
         if noise is None:
@@ -97,12 +98,17 @@ class Consistency_Model:
         def target_denoise_fn(x, t, state=None):
             return self.denoise(target_model, x, t, state)[1]
 
-        @th.no_grad()
-        def euler_solver(samples, t, next_t, x0): # x_t (x_t_n+1), t (t_n+1), t2 (t_n), x_start
+        @th.no_grad() # get x_tn based on x_tn+1 and score_function
+        def euler_solver(samples, t, next_t, score_function, state): # x_t (x_t_n+1), t (t_n+1), t2 (t_n), x_start
             x = samples
-            denoiser = x0
-            d = (x - denoiser) / append_dims(t, dims)
-            samples = x + d * append_dims(next_t - t, dims) # according to Training Consistency Models in Isolation
+            with th.set_grad_enabled(True):
+                action_temp = x.clone().detach().requires_grad_(True)
+                q_value = score_function.q1_forward(state, action_temp).mean()
+                q_value.backward()
+                dq_a = action_temp.grad # target_actions = replay_data.actions - 0.05 * dq_a, which will make actions better
+                normalised_score = (dq_a - dq_a.mean(dim=1, keepdim=True)) / dq_a.std(dim=1, keepdim=True)
+            delta_t = append_dims(next_t - t, dims)
+            samples = x - normalised_score * append_dims(next_t - t, dims)
 
             return samples
 
@@ -125,9 +131,11 @@ class Consistency_Model:
         dropout_state = th.get_rng_state() # random number generator
         distiller = denoise_fn(x_t, t, state) # # predicted target based on t = t_n+1
 
-        # x_t2 = euler_solver(x_t, t, t2, x_start).detach()
         # equals to: x_t2 = x_start + noise * append_dims(t2, dims)
-        x_t2 = x_start + noise * append_dims(t2, dims)
+        if score_function:
+            x_t2 = euler_solver(x_t, t, t2, score_function, state).detach()
+        else:
+            x_t2 = x_start + noise * append_dims(t2, dims).detach()
 
         th.set_rng_state(dropout_state)
         distiller_target = target_denoise_fn(x_t2, t2, state) # predicted target based on t2=t_n

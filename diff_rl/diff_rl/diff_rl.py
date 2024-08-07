@@ -155,10 +155,10 @@ class TD3(OffPolicyAlgorithm):
                 compute_bc_losses = functools.partial(self.consistency_model.consistency_losses,
                                               model=self.actor,
                                               x_start=replay_data.actions,
-                                              noise=normalised_dq_a,
                                               num_scales=40,
                                               target_model=self.actor_target,
-                                              state=replay_data.observations,)
+                                              state=replay_data.observations,
+                                              score_function=self.critic)
 
                 bc_losses = compute_bc_losses() # but here take loss rather than consistency_loss
                 actor_loss = bc_losses["consistency_loss"].mean() - self.critic.q1_forward(replay_data.observations, sampled_action).mean()
